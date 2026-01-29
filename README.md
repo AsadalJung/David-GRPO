@@ -85,3 +85,6 @@ david-grpo/
 ├── experiments/          # Training & evaluation scripts
 ├── configs/              # Hyperparameter configs
 └── README.md
+
+## License
+This project is licensed under the Apache License 2.0.
