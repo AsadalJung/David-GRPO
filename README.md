@@ -47,6 +47,37 @@ DAVID-GRPO enables **multi-hop reasoning under tight compute budgets** by reinte
   <em>Figure 2. Overview of DAVID-GRPO.</em>
 </p>
 
+## Results
+Numbers are Exact Match (EM) / F1. Dashes indicate not reported. † are reported from Ji et al. (2025a).
+
+### Qwen2.5-1.5B
+| Method | HotpotQA | 2Wiki | Musique | Bamboogle | Bamtwoogle | Antileak-m | Avg |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Direct Inference† | 5.9 / - | 4.3 / - | 2.6 / - | 8.0 / - | - / - | - / - | - / - |
+| Search-o1† | 11.6 / - | 12.2 / - | 3.1 / - | 13.0 / - | - / - | - / - | - / - |
+| GRPO† | 14.6 / - | 24.4 / - | 2.2 / - | 4.0 / - | - / - | - / - | - / - |
+| Tree-GRPO† (High) | 29.5 / - | 26.8 / - | 6.6 / - | 13.6 / - | - / - | - / - | - / - |
+| Tree-GRPO | 12.9 / 18.6 | 20.5 / 23.3 | 2.1 / 7.2 | 12.0 / 15.5 | 5.0 / 8.2 | 11.7 / 15.7 | 10.7 / 14.8 |
+| StepSearch | 11.9 / 18.1 | 13.5 / 18.1 | 2.2 / 6.9 | 3.2 / 8.7 | 4.0 / 6.0 | 12.1 / 17.3 | 7.8 / 12.5 |
+| Search-R1-v0.3 (retrieval reward) | 19.0 / 26.5 | 21.3 / 26.4 | 3.6 / 9.2 | 8.0 / 14.3 | 3.0 / 5.5 | 16.7 / 22.2 | 11.9 / 17.4 |
+| **DAVID-GRPO** | **24.8 / 33.8** | **27.2 / 32.3** | **7.1 / 12.6** | **14.4 / 24.2** | **22.0 / 25.4** | **36.3 / 41.1** | **22.0 / 28.2** |
+
+### Llama-3.2-1B
+| Method | HotpotQA | 2Wiki | Musique | Bamboogle | Bamtwoogle | Antileak-m | Avg |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Tree-GRPO | 12.4 / 18.4 | 20.5 / 23.4 | 1.6 / 7.1 | 4.0 / 8.9 | 9.0 / 11.9 | 16.0 / 20.7 | 10.6 / 15.1 |
+| StepSearch | 16.0 / 24.5 | 11.7 / 16.2 | 2.7 / 9.7 | 4.0 / 11.0 | 3.0 / 5.7 | 22.4 / 31.4 | 10.0 / 16.4 |
+| Search-R1-v0.3 (retrieval reward) | 8.5 / 12.4 | 13.5 / 16.2 | 0.7 / 3.7 | 0.8 / 1.6 | 2.0 / 4.7 | 13.0 / 15.3 | 6.4 / 9.0 |
+| **DAVID-GRPO** | **17.7 / 25.2** | **16.1 / 21.4** | **3.2 / 8.5** | **8.0 / 14.5** | **3.0 / 6.6** | **23.3 / 31.7** | **11.9 / 18.0** |
+
+### Qwen2.5-0.5B
+| Method | HotpotQA | 2Wiki | Musique | Bamboogle | Bamtwoogle | Antileak-m | Avg |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Tree-GRPO | 9.2 / 12.8 | 20.9 / 22.8 | 0.7 / 3.8 | 3.2 / 5.2 | 4.0 / 5.5 | 10.3 / 12.7 | 8.1 / 10.5 |
+| StepSearch | 2.1 / 4.5 | 4.3 / 7.3 | 0.2 / 1.8 | 1.6 / 2.1 | 0.0 / 0.6 | 0.2 / 0.8 | 1.4 / 2.9 |
+| Search-R1-v0.3 (retrieval reward) | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 |
+| **DAVID-GRPO** | **10.8 / 16.0** | **17.4 / 20.8** | **2.0 / 5.3** | **4.8 / 8.1** | **6.0 / 7.0** | **10.6 / 14.4** | **8.6 / 11.9** |
+
 ## Quick Start
 Set your repo root once:
 ```bash
