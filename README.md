@@ -43,9 +43,8 @@ DAVID-GRPO enables **multi-hop reasoning under tight compute budgets** by reinte
 
 <p align="center">
   <img alt="Figure 2. Overview of DAVID-GRPO" src="resources/main.png" />
-  <i>
-  Figure 2. Overview of DAVID-GRPO.
-  </i>
+  <br>
+  <em>Figure 2. Overview of DAVID-GRPO.</em>
 </p>
 
 ## Quick Start
