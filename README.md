@@ -51,32 +51,122 @@ DAVID-GRPO enables **multi-hop reasoning under tight compute budgets** by reinte
 Numbers are Exact Match (EM) / F1. Dashes indicate not reported. † are reported from Ji et al. (2025a).
 
 ### Qwen2.5-1.5B
-| Method | HotpotQA | 2Wiki | Musique | Bamboogle | Bamtwoogle | Antileak-m | Avg |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Direct Inference† | 5.9 / - | 4.3 / - | 2.6 / - | 8.0 / - | - / - | - / - | - / - |
-| Search-o1† | 11.6 / - | 12.2 / - | 3.1 / - | 13.0 / - | - / - | - / - | - / - |
-| GRPO† | 14.6 / - | 24.4 / - | 2.2 / - | 4.0 / - | - / - | - / - | - / - |
-| Tree-GRPO† (High) | 29.5 / - | 26.8 / - | 6.6 / - | 13.6 / - | - / - | - / - | - / - |
-| Tree-GRPO | 12.9 / 18.6 | 20.5 / 23.3 | 2.1 / 7.2 | 12.0 / 15.5 | 5.0 / 8.2 | 11.7 / 15.7 | 10.7 / 14.8 |
-| StepSearch | 11.9 / 18.1 | 13.5 / 18.1 | 2.2 / 6.9 | 3.2 / 8.7 | 4.0 / 6.0 | 12.1 / 17.3 | 7.8 / 12.5 |
-| Search-R1-v0.3 (retrieval reward) | 19.0 / 26.5 | 21.3 / 26.4 | 3.6 / 9.2 | 8.0 / 14.3 | 3.0 / 5.5 | 16.7 / 22.2 | 11.9 / 17.4 |
-| **DAVID-GRPO** | **24.8 / 33.8** | **27.2 / 32.3** | **7.1 / 12.6** | **14.4 / 24.2** | **22.0 / 25.4** | **36.3 / 41.1** | **22.0 / 28.2** |
+<table>
+  <thead>
+    <tr>
+      <th align="left">Method</th>
+      <th>HotpotQA</th>
+      <th>2Wiki</th>
+      <th>Musique</th>
+      <th>Bamboogle</th>
+      <th>Bamtwoogle</th>
+      <th>Antileak-m</th>
+      <th>Avg</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td align="left">Direct Inference†</td>
+      <td>5.9 / -</td><td>4.3 / -</td><td>2.6 / -</td><td>8.0 / -</td><td>- / -</td><td>- / -</td><td>- / -</td>
+    </tr>
+    <tr>
+      <td align="left">Search-o1†</td>
+      <td>11.6 / -</td><td>12.2 / -</td><td>3.1 / -</td><td>13.0 / -</td><td>- / -</td><td>- / -</td><td>- / -</td>
+    </tr>
+    <tr>
+      <td align="left">GRPO†</td>
+      <td>14.6 / -</td><td>24.4 / -</td><td>2.2 / -</td><td>4.0 / -</td><td>- / -</td><td>- / -</td><td>- / -</td>
+    </tr>
+    <tr>
+      <td align="left">Tree-GRPO† (High)</td>
+      <td>29.5 / -</td><td>26.8 / -</td><td>6.6 / -</td><td>13.6 / -</td><td>- / -</td><td>- / -</td><td>- / -</td>
+    </tr>
+    <tr>
+      <td align="left">Tree-GRPO</td>
+      <td>12.9 / 18.6</td><td>20.5 / 23.3</td><td>2.1 / 7.2</td><td>12.0 / 15.5</td><td>5.0 / 8.2</td><td>11.7 / 15.7</td><td>10.7 / 14.8</td>
+    </tr>
+    <tr>
+      <td align="left">StepSearch</td>
+      <td>11.9 / 18.1</td><td>13.5 / 18.1</td><td>2.2 / 6.9</td><td>3.2 / 8.7</td><td>4.0 / 6.0</td><td>12.1 / 17.3</td><td>7.8 / 12.5</td>
+    </tr>
+    <tr>
+      <td align="left">Search-R1-v0.3 (retrieval reward)</td>
+      <td>19.0 / 26.5</td><td>21.3 / 26.4</td><td>3.6 / 9.2</td><td>8.0 / 14.3</td><td>3.0 / 5.5</td><td>16.7 / 22.2</td><td>11.9 / 17.4</td>
+    </tr>
+    <tr>
+      <td align="left"><strong>DAVID-GRPO</strong></td>
+      <td><strong>24.8 / 33.8</strong></td><td><strong>27.2 / 32.3</strong></td><td><strong>7.1 / 12.6</strong></td><td><strong>14.4 / 24.2</strong></td><td><strong>22.0 / 25.4</strong></td><td><strong>36.3 / 41.1</strong></td><td><strong>22.0 / 28.2</strong></td>
+    </tr>
+  </tbody>
+</table>
 
 ### Llama-3.2-1B
-| Method | HotpotQA | 2Wiki | Musique | Bamboogle | Bamtwoogle | Antileak-m | Avg |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Tree-GRPO | 12.4 / 18.4 | 20.5 / 23.4 | 1.6 / 7.1 | 4.0 / 8.9 | 9.0 / 11.9 | 16.0 / 20.7 | 10.6 / 15.1 |
-| StepSearch | 16.0 / 24.5 | 11.7 / 16.2 | 2.7 / 9.7 | 4.0 / 11.0 | 3.0 / 5.7 | 22.4 / 31.4 | 10.0 / 16.4 |
-| Search-R1-v0.3 (retrieval reward) | 8.5 / 12.4 | 13.5 / 16.2 | 0.7 / 3.7 | 0.8 / 1.6 | 2.0 / 4.7 | 13.0 / 15.3 | 6.4 / 9.0 |
-| **DAVID-GRPO** | **17.7 / 25.2** | **16.1 / 21.4** | **3.2 / 8.5** | **8.0 / 14.5** | **3.0 / 6.6** | **23.3 / 31.7** | **11.9 / 18.0** |
+<table>
+  <thead>
+    <tr>
+      <th align="left">Method</th>
+      <th>HotpotQA</th>
+      <th>2Wiki</th>
+      <th>Musique</th>
+      <th>Bamboogle</th>
+      <th>Bamtwoogle</th>
+      <th>Antileak-m</th>
+      <th>Avg</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td align="left">Tree-GRPO</td>
+      <td>12.4 / 18.4</td><td>20.5 / 23.4</td><td>1.6 / 7.1</td><td>4.0 / 8.9</td><td>9.0 / 11.9</td><td>16.0 / 20.7</td><td>10.6 / 15.1</td>
+    </tr>
+    <tr>
+      <td align="left">StepSearch</td>
+      <td>16.0 / 24.5</td><td>11.7 / 16.2</td><td>2.7 / 9.7</td><td>4.0 / 11.0</td><td>3.0 / 5.7</td><td>22.4 / 31.4</td><td>10.0 / 16.4</td>
+    </tr>
+    <tr>
+      <td align="left">Search-R1-v0.3 (retrieval reward)</td>
+      <td>8.5 / 12.4</td><td>13.5 / 16.2</td><td>0.7 / 3.7</td><td>0.8 / 1.6</td><td>2.0 / 4.7</td><td>13.0 / 15.3</td><td>6.4 / 9.0</td>
+    </tr>
+    <tr>
+      <td align="left"><strong>DAVID-GRPO</strong></td>
+      <td><strong>17.7 / 25.2</strong></td><td><strong>16.1 / 21.4</strong></td><td><strong>3.2 / 8.5</strong></td><td><strong>8.0 / 14.5</strong></td><td><strong>3.0 / 6.6</strong></td><td><strong>23.3 / 31.7</strong></td><td><strong>11.9 / 18.0</strong></td>
+    </tr>
+  </tbody>
+</table>
 
 ### Qwen2.5-0.5B
-| Method | HotpotQA | 2Wiki | Musique | Bamboogle | Bamtwoogle | Antileak-m | Avg |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Tree-GRPO | 9.2 / 12.8 | 20.9 / 22.8 | 0.7 / 3.8 | 3.2 / 5.2 | 4.0 / 5.5 | 10.3 / 12.7 | 8.1 / 10.5 |
-| StepSearch | 2.1 / 4.5 | 4.3 / 7.3 | 0.2 / 1.8 | 1.6 / 2.1 | 0.0 / 0.6 | 0.2 / 0.8 | 1.4 / 2.9 |
-| Search-R1-v0.3 (retrieval reward) | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 |
-| **DAVID-GRPO** | **10.8 / 16.0** | **17.4 / 20.8** | **2.0 / 5.3** | **4.8 / 8.1** | **6.0 / 7.0** | **10.6 / 14.4** | **8.6 / 11.9** |
+<table>
+  <thead>
+    <tr>
+      <th align="left">Method</th>
+      <th>HotpotQA</th>
+      <th>2Wiki</th>
+      <th>Musique</th>
+      <th>Bamboogle</th>
+      <th>Bamtwoogle</th>
+      <th>Antileak-m</th>
+      <th>Avg</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td align="left">Tree-GRPO</td>
+      <td>9.2 / 12.8</td><td>20.9 / 22.8</td><td>0.7 / 3.8</td><td>3.2 / 5.2</td><td>4.0 / 5.5</td><td>10.3 / 12.7</td><td>8.1 / 10.5</td>
+    </tr>
+    <tr>
+      <td align="left">StepSearch</td>
+      <td>2.1 / 4.5</td><td>4.3 / 7.3</td><td>0.2 / 1.8</td><td>1.6 / 2.1</td><td>0.0 / 0.6</td><td>0.2 / 0.8</td><td>1.4 / 2.9</td>
+    </tr>
+    <tr>
+      <td align="left">Search-R1-v0.3 (retrieval reward)</td>
+      <td>0.0 / 0.0</td><td>0.0 / 0.0</td><td>0.0 / 0.0</td><td>0.0 / 0.0</td><td>0.0 / 0.0</td><td>0.0 / 0.0</td><td>0.0 / 0.0</td>
+    </tr>
+    <tr>
+      <td align="left"><strong>DAVID-GRPO</strong></td>
+      <td><strong>10.8 / 16.0</strong></td><td><strong>17.4 / 20.8</strong></td><td><strong>2.0 / 5.3</strong></td><td><strong>4.8 / 8.1</strong></td><td><strong>6.0 / 7.0</strong></td><td><strong>10.6 / 14.4</strong></td><td><strong>8.6 / 11.9</strong></td>
+    </tr>
+  </tbody>
+</table>
 
 ## Quick Start
 Set your repo root once:
