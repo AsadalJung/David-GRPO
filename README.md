@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="resources/logo.png" width="380px">
+  <img src="resources/logo.png" width="320px">
 </div>
 <h1 align="center" style="margin-top: 10px;">Can David Beat Goliath? On Multi-Hop Reasoning with Resource-Constrained Agents</h1>
 
@@ -42,7 +42,7 @@ DAVID-GRPO enables **multi-hop reasoning under tight compute budgets** by reinte
 - **Grounded expansion** (resampling truncated near-miss trajectories)
 
 <p align="center">
-  <img alt="Figure 2. Overview of DAVID-GRPO" src="resources/main.png" />
+  <img alt="Figure 2. Overview of DAVID-GRPO" src="resources/main.png" width="656" />
   <br>
   <em>Figure 2. Overview of DAVID-GRPO.</em>
 </p>
@@ -51,7 +51,7 @@ DAVID-GRPO enables **multi-hop reasoning under tight compute budgets** by reinte
 Numbers are Exact Match (EM) / F1. Dashes indicate not reported. † are reported from Ji et al. (2025a).
 
 <p align="center">
-  <img alt="Overall performance comparison on six multi-hop QA benchmarks" src="resources/table.png" />
+  <img alt="Overall performance comparison on six multi-hop QA benchmarks" src="resources/table.png" width="656" />
   <br>
   <em>Overall performance comparison on six multi-hop QA benchmarks.</em>
 </p>
