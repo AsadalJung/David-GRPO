@@ -152,13 +152,8 @@ ${REPO_ROOT}/scripts/eval/generate_response.sh
 ```
 
 ## Acknowledgements
-- Codebase derived from AutoCoA and Search-R1.
-- Reinforcement learning pipeline uses the **verl** framework.
-
-References:
-- https://github.com/ADaM-BJTU/AutoCoA
-- https://github.com/PeterGriffinJin/Search-R1
-- https://github.com/verl-project/verl
+The codebase is built upon [AutoCoA](https://github.com/ADaM-BJTU/AutoCoA) and [Search-R1](https://github.com/PeterGriffinJin/Search-R1).  
+The reinforcement learning pipeline uses the [verl](https://github.com/verl-project/verl) framework.
 
 ## Citation
 ```bibtex
