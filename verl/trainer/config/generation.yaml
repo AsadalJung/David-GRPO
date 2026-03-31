@@ -1,6 +1,7 @@
 trainer:
   nnodes: 1
   n_gpus_per_node: 8
+  ray_max_collocate_count: 1
 data:
   path: ~/data/rlhf/math/test.parquet
   prompt_key: prompt

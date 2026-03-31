@@ -81,7 +81,11 @@ def main(config):
         tokenizer.pad_token = tokenizer.eos_token
 
     ray_cls_with_init = RayClassWithInitArgs(cls=ray.remote(ActorRolloutRefWorker), config=config, role='rollout')
-    resource_pool = RayResourcePool(process_on_nodes=[config.trainer.n_gpus_per_node] * config.trainer.nnodes)
+    ray_max_collocate_count = int(config.trainer.get('ray_max_collocate_count', 1))
+    if ray_max_collocate_count < 1:
+        raise ValueError(f'trainer.ray_max_collocate_count must be >= 1, got {ray_max_collocate_count}')
+    resource_pool = RayResourcePool(process_on_nodes=[config.trainer.n_gpus_per_node] * config.trainer.nnodes,
+                                    max_colocate_count=ray_max_collocate_count)
     wg = RayWorkerGroup(resource_pool=resource_pool, ray_cls_with_init=ray_cls_with_init)
     wg.init_model()
 

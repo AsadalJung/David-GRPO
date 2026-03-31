@@ -205,6 +205,17 @@ def check_search_token(text):
     return "", ""
 
 
+def _max_prompt_tokens_for_generation(prompt_length: int, response_length: int, max_tokens: int) -> int:
+    return max(1, int(prompt_length) + int(response_length) - int(max_tokens))
+
+
+def _fits_prompt_token_limit(tokenizer, prompt_text: str, max_prompt_tokens: int) -> bool:
+    if max_prompt_tokens is None or max_prompt_tokens <= 0:
+        return True
+    prompt_token_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+    return len(prompt_token_ids) <= max_prompt_tokens
+
+
 def normalize_title_for_otr(title):
     """OTR(Optimal Truncation Resampling) sampling용 타이틀 정규화 (hotpotqa.py와 동일)"""
     if not title:
@@ -276,7 +287,7 @@ except ImportError as e:
     HOTPOTQA_AVAILABLE = False
 
 
-def score_sequences_simple(full_sequences, ground_truths, supporting_facts_list):
+def score_sequences_simple(full_sequences, ground_truths, supporting_facts_list, trainer_config=None):
     """간단한 시퀀스 점수 계산 함수"""
     if not HOTPOTQA_AVAILABLE:
         # Skipping sequence scoring - hotpotqa module not available
@@ -302,15 +313,18 @@ def score_sequences_simple(full_sequences, ground_truths, supporting_facts_list)
             supporting_facts = {}
         
         try:
+            effective_trainer_config = {'give_partial_reward': True}
+            if trainer_config:
+                effective_trainer_config.update({
+                    'use_answer_in_search_reward': trainer_config.get('use_answer_in_search_reward', False),
+                    'require_search_match_for_answer': trainer_config.get('require_search_match_for_answer', False),
+                    'partial_reward_weight': trainer_config.get('partial_reward_weight', 0.5),
+                })
+
             # extra_info 구성
             extra_info = {
                 'supporting_facts': supporting_facts,
-                'trainer_config': {
-                    'give_partial_reward': True,
-                    'use_answer_in_search_reward': self.config.get('use_answer_in_search_reward', False),
-                    'require_search_match_for_answer': self.config.get('require_search_match_for_answer', False),
-                    'partial_reward_weight': self.config.get('partial_reward_weight', 0.5),
-                }
+                'trainer_config': effective_trainer_config,
             }
             
             # hotpotqa 점수 계산
@@ -476,14 +490,24 @@ def find_optimal_truncation_point(sequence, supporting_facts, prompt_length, max
         return aligned_cut
 
 
-def new_otr_resampling_logic(full_sequences, supporting_facts_list, ground_truths, prompt_lengths, score_threshold=1.0, rollout_n=5, max_search_nums=10):
+def new_otr_resampling_logic(full_sequences,
+                             supporting_facts_list,
+                             ground_truths,
+                             prompt_lengths,
+                             score_threshold=1.0,
+                             rollout_n=5,
+                             max_search_nums=10,
+                             trainer_config=None):
     """OTR(Optimal Truncation Resampling) - 그룹 내 최고 점수가 1 미만일 때만 재샘플링.
 
     새 전략: 그룹에서 가장 점수가 높은 시퀀스 하나를 잘라 복제한 뒤, 그룹 크기만큼 재생성하여
     최고 후보가 기존 최고 점수를 넘어설 경우 해당 후보를 그룹 내 최저 점수 시퀀스와 교체한다.
     """
 
-    all_scores = score_sequences_simple(full_sequences, ground_truths, supporting_facts_list)
+    all_scores = score_sequences_simple(full_sequences,
+                                        ground_truths,
+                                        supporting_facts_list,
+                                        trainer_config=trainer_config)
     if not all_scores:
         return [], full_sequences, supporting_facts_list
 
@@ -568,7 +592,12 @@ def new_otr_resampling_logic(full_sequences, supporting_facts_list, ground_truth
     return groups_to_resample, final_sequences, final_supporting_facts
 
 
-def process_search_answer_batch(ans_list, current_prefix_list, reach_limit=False):
+def process_search_answer_batch(ans_list,
+                               current_prefix_list,
+                               reach_limit=False,
+                               tokenizer=None,
+                               max_prompt_tokens=None,
+                               search_stopped_flags=None):
     search_queries = []
     ans_modified_list = []
     for ans in ans_list:
@@ -578,16 +607,30 @@ def process_search_answer_batch(ans_list, current_prefix_list, reach_limit=False
     
     new_prefix_list = [None] * len(current_prefix_list)  
     search_flag_list = [False] * len(current_prefix_list)  
+    if search_stopped_flags is None:
+        search_stopped_flags = [False] * len(current_prefix_list)
+    else:
+        search_stopped_flags = list(search_stopped_flags)
     
     for i, search_query in enumerate(search_queries):
+        if search_stopped_flags[i]:
+            new_prefix_list[i] = current_prefix_list[i]
+            search_flag_list[i] = False
+            continue
         if search_query == "":
             new_prefix_list[i] = current_prefix_list[i]  
             search_flag_list[i] = False
         else:
             if reach_limit:
                 new_prefix = current_prefix_list[i] + f"{ans_modified_list[i]}\n\n<search_result> Reach the limit of search times. </search_result>\n\n"
-                new_prefix_list[i] = new_prefix  
-                search_flag_list[i] = True
+                if tokenizer is not None and not _fits_prompt_token_limit(tokenizer, new_prefix, max_prompt_tokens):
+                    new_prefix_list[i] = current_prefix_list[i]
+                    search_flag_list[i] = False
+                    search_stopped_flags[i] = True
+                    print(f"[search] context limit reached at seq {i}; stopping search/regeneration")
+                else:
+                    new_prefix_list[i] = new_prefix  
+                    search_flag_list[i] = True
             else:
                 search_flag_list[i] = True
     
@@ -607,16 +650,28 @@ def process_search_answer_batch(ans_list, current_prefix_list, reach_limit=False
             for idx, result_idx in enumerate(query_indices):
                 if idx < len(search_results):  
                     new_prefix = current_prefix_list[result_idx] + f"{ans_modified_list[result_idx]}\n\n{search_results[idx]}\n\n"
-                    new_prefix_list[result_idx] = new_prefix  
+                    if tokenizer is not None and not _fits_prompt_token_limit(tokenizer, new_prefix, max_prompt_tokens):
+                        new_prefix_list[result_idx] = current_prefix_list[result_idx]
+                        search_flag_list[result_idx] = False
+                        search_stopped_flags[result_idx] = True
+                        print(f"[search] context limit reached at seq {result_idx}; stopping search/regeneration")
+                    else:
+                        new_prefix_list[result_idx] = new_prefix  
         
         except Exception as e:
             print("An error occurred during the search process: ", e)
             for i in range(len(search_queries)):
                 if search_flag_list[i] and new_prefix_list[i] is None:
                     new_prefix = current_prefix_list[i] + f"{ans_modified_list[i]}\n\n<search_result> Retrieval failed due to an error. </search_result>\n\n"
-                    new_prefix_list[i] = new_prefix
+                    if tokenizer is not None and not _fits_prompt_token_limit(tokenizer, new_prefix, max_prompt_tokens):
+                        new_prefix_list[i] = current_prefix_list[i]
+                        search_flag_list[i] = False
+                        search_stopped_flags[i] = True
+                        print(f"[search] context limit reached at seq {i}; stopping search/regeneration")
+                    else:
+                        new_prefix_list[i] = new_prefix
     
-    return new_prefix_list, search_flag_list
+    return new_prefix_list, search_flag_list, search_stopped_flags
     
 
 # NOTE(sgm): add for verl. We can optimize it by making the dataloader yield List[int] without padding.
@@ -808,6 +863,7 @@ class vLLMRollout(BaseRollout):
         ]
 
         used_searches = [0] * len(truncated_input_ids)
+        search_stopped_flags = [False] * len(truncated_input_ids)
         max_searches = max(remaining_searches) if remaining_searches else 0
         single_resample_params = copy.deepcopy(batch_resample_params)
         single_resample_params.max_tokens = 1024
@@ -818,10 +874,15 @@ class vLLMRollout(BaseRollout):
                 reach_limit = (search_iter >= remaining - 1) or (used >= remaining)
                 sequences_reach_limit.append(reach_limit)
 
-            new_prefix_list, search_flag_list = self._process_search_answer_batch_with_individual_limits(
+            max_prompt_tokens = _max_prompt_tokens_for_generation(self.config.prompt_length,
+                                                                 self.config.response_length,
+                                                                 single_resample_params.max_tokens)
+            new_prefix_list, search_flag_list, search_stopped_flags = self._process_search_answer_batch_with_individual_limits(
                 current_response_strs,
                 current_prefix_list,
-                sequences_reach_limit
+                sequences_reach_limit,
+                max_prompt_tokens=max_prompt_tokens,
+                search_stopped_flags=search_stopped_flags
             )
 
             current_prefix_list = new_prefix_list
@@ -999,7 +1060,12 @@ class vLLMRollout(BaseRollout):
 
         return actions, token_stats, resample_output_tokens_by_seq_idx
 
-    def _process_search_answer_batch_with_individual_limits(self, ans_list, current_prefix_list, sequences_reach_limit):
+    def _process_search_answer_batch_with_individual_limits(self,
+                                                            ans_list,
+                                                            current_prefix_list,
+                                                            sequences_reach_limit,
+                                                            max_prompt_tokens=None,
+                                                            search_stopped_flags=None):
         """개별 시퀀스별 검색 제한을 적용한 배치 검색 처리"""
         search_queries = []
         ans_modified_list = []
@@ -1011,9 +1077,17 @@ class vLLMRollout(BaseRollout):
         
         new_prefix_list = [None] * len(current_prefix_list)  
         search_flag_list = [False] * len(current_prefix_list)  
+        if search_stopped_flags is None:
+            search_stopped_flags = [False] * len(current_prefix_list)
+        else:
+            search_stopped_flags = list(search_stopped_flags)
         
         # 각 시퀀스별로 개별 제한 적용
         for i, (search_query, reach_limit) in enumerate(zip(search_queries, sequences_reach_limit)):
+            if search_stopped_flags[i]:
+                new_prefix_list[i] = current_prefix_list[i]
+                search_flag_list[i] = False
+                continue
             if search_query == "":
                 new_prefix_list[i] = current_prefix_list[i]  
                 search_flag_list[i] = False
@@ -1021,8 +1095,14 @@ class vLLMRollout(BaseRollout):
                 if reach_limit:
                     # 해당 시퀀스가 검색 제한에 도달한 경우
                     new_prefix = current_prefix_list[i] + f"{ans_modified_list[i]}\n\n<search_result> Reach the limit of search times. </search_result>\n\n"
-                    new_prefix_list[i] = new_prefix  
-                    search_flag_list[i] = True
+                    if not _fits_prompt_token_limit(self.tokenizer, new_prefix, max_prompt_tokens):
+                        new_prefix_list[i] = current_prefix_list[i]
+                        search_flag_list[i] = False
+                        search_stopped_flags[i] = True
+                        print(f"[search] context limit reached at seq {i}; stopping search/regeneration")
+                    else:
+                        new_prefix_list[i] = new_prefix  
+                        search_flag_list[i] = True
                 else:
                     # 아직 검색 가능한 경우
                     search_flag_list[i] = True
@@ -1046,16 +1126,28 @@ class vLLMRollout(BaseRollout):
                     for idx, result_idx in enumerate(query_indices):
                         if idx < len(search_results):  
                             new_prefix = current_prefix_list[result_idx] + f"{ans_modified_list[result_idx]}\n\n{search_results[idx]}\n\n"
-                            new_prefix_list[result_idx] = new_prefix  
+                            if not _fits_prompt_token_limit(self.tokenizer, new_prefix, max_prompt_tokens):
+                                new_prefix_list[result_idx] = current_prefix_list[result_idx]
+                                search_flag_list[result_idx] = False
+                                search_stopped_flags[result_idx] = True
+                                print(f"[search] context limit reached at seq {result_idx}; stopping search/regeneration")
+                            else:
+                                new_prefix_list[result_idx] = new_prefix  
             
             except Exception as e:
                 print("An error occurred during the batch search process: ", e)
                 for i in range(len(search_queries)):
                     if search_flag_list[i] and new_prefix_list[i] is None:
                         new_prefix = current_prefix_list[i] + f"{ans_modified_list[i]}\n\n<search_result> Retrieval failed due to an error. </search_result>\n\n"
-                        new_prefix_list[i] = new_prefix
+                        if not _fits_prompt_token_limit(self.tokenizer, new_prefix, max_prompt_tokens):
+                            new_prefix_list[i] = current_prefix_list[i]
+                            search_flag_list[i] = False
+                            search_stopped_flags[i] = True
+                            print(f"[search] context limit reached at seq {i}; stopping search/regeneration")
+                        else:
+                            new_prefix_list[i] = new_prefix
         
-        return new_prefix_list, search_flag_list
+        return new_prefix_list, search_flag_list, search_stopped_flags
         
     @contextmanager
     def update_sampling_params(self, **kwargs):
@@ -1278,6 +1370,7 @@ class vLLMRollout(BaseRollout):
         re_sampling_params.n = 1
         re_sampling_params.max_tokens=1024
         re_sampling_params.stop_token_ids=list(eos_token_ids) if eos_token_ids else [eos_token_id]
+        search_stopped_flags = [False] * len(response_str_list)
 
         print('re_sampling_params', re_sampling_params)
         pber = tqdm(range(self.max_search_nums + 1), desc="Searching...", disable=False)        
@@ -1290,10 +1383,16 @@ class vLLMRollout(BaseRollout):
                 re_sampling_params.max_tokens = 2048
                 
             start_time = time.time()
-            new_prefix_list, search_flag_list = process_search_answer_batch(
+            max_prompt_tokens = _max_prompt_tokens_for_generation(self.config.prompt_length,
+                                                                 self.config.response_length,
+                                                                 re_sampling_params.max_tokens)
+            new_prefix_list, search_flag_list, search_stopped_flags = process_search_answer_batch(
                 response_str_list, 
                 current_prefix_list, 
-                reach_limit=(iter == self.max_search_nums)
+                reach_limit=(iter == self.max_search_nums),
+                tokenizer=self.tokenizer,
+                max_prompt_tokens=max_prompt_tokens,
+                search_stopped_flags=search_stopped_flags
             )
             
             current_prefix_list = new_prefix_list
@@ -1474,6 +1573,13 @@ class vLLMRollout(BaseRollout):
                 else:
                     raise ValueError(f"Missing original_prompt_id in supporting_facts_list at index {i}: {facts_meta}")
             
+            otr_trainer_config = {
+                'give_partial_reward': True,
+                'use_answer_in_search_reward': self.config.get('use_answer_in_search_reward', False),
+                'require_search_match_for_answer': self.config.get('require_search_match_for_answer', False),
+                'partial_reward_weight': self.config.get('partial_reward_weight', 0.5),
+            }
+
             groups_to_resample, final_sequences, final_supporting_facts = new_otr_resampling_logic(
                 full_sequences=full_sequences,
                 supporting_facts_list=supporting_facts_list,
@@ -1481,7 +1587,8 @@ class vLLMRollout(BaseRollout):
                 prompt_lengths=prompt_lengths,
                 score_threshold=1.0,
                 rollout_n=current_n,
-                max_search_nums=self.max_search_nums
+                max_search_nums=self.max_search_nums,
+                trainer_config=otr_trainer_config,
             )
 
             prompt_token_lens = {}
