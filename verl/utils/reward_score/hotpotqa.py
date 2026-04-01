@@ -41,6 +41,15 @@ def validate_search_tags(solution_str):
     return True
 
 
+def has_duplicate_search_queries(solution_str):
+    """Return True if <begin_search> queries are duplicated."""
+    search_queries = re.findall(r'<begin_search>(.*?)</end_search>', solution_str, re.DOTALL)
+    if not search_queries:
+        return False
+    normalized_queries = [query.strip() for query in search_queries]
+    return len(normalized_queries) != len(set(normalized_queries))
+
+
 def extract_titles_from_search_results(solution_str):
     """검색 결과에서 타이틀들을 추출합니다.
     
@@ -318,23 +327,11 @@ def default_compute_score(solution_str, ground_truth, method='strict', format_sc
     # Preprocessing check
     if not solution_str or not ground_truth:
         return 0.0
-    
-    # Format check (if checking for </think> format is needed)
-    format_correct = '</think>' in solution_str 
-    if not format_correct:
-        return 0.0
-    
-    # </think> 이후에 검색 관련 태그들이 있으면 0점
-    after_think = solution_str.split('</think>')[-1]
-    search_tags = ['<begin_search>', '</end_search>', '<search_result>', '</search_result>']
-    if any(tag in after_think for tag in search_tags):
-        return 0.0  # </think> 이후에 검색 관련 태그가 있으면 0점
-    
-   # <think> 이후에서 검색시도 안했을 경우 0점 
-    response_part = solution_str.split('<think>')[-1].strip()
 
-    if '<begin_search>' not in response_part:
-        return 0.0  # <think> 이후에 검색 시도가 없으면 0점
+    if has_duplicate_search_queries(solution_str):
+        return 0.0
+
+    response_part = solution_str.split('<think>')[-1].strip()
     
     # Partial reward 계산
     partial_reward = 0.0
@@ -352,10 +349,6 @@ def default_compute_score(solution_str, ground_truth, method='strict', format_sc
         answer_reward_weight = 1.0 - partial_reward_weight
         
         if give_partial_reward:
-            # 검색 태그 검증 (기본 포맷 검증) - partial reward 사용 시에만
-            if not validate_search_tags(response_part):
-                return 0.0
-
             if use_answer_in_search_reward:
                 partial_reward = compute_answer_in_search_reward(
                     response_part,
@@ -379,27 +372,28 @@ def default_compute_score(solution_str, ground_truth, method='strict', format_sc
     
     # give_partial_reward=True일 때만 새로운 로직 적용
     if give_partial_reward:
-        if answer is None:
-            return 0.0
         if require_search_match_for_answer and partial_reward <= 0.0:
             return 0.0
 
         # 답안 정확도 점수 계산 (최대 1 - partial_reward_weight 점)
         answer_score = 0.0
 
-        if answer == normalized_ground_truth:
-            answer_score = answer_reward_weight
-        elif normalized_ground_truth in answer or answer in normalized_ground_truth:
-            answer_score = answer_reward_weight * 0.5
-        else:
-            gt_words = set(normalized_ground_truth.split())
-            answer_words = set(answer.split())
-            common_words = gt_words.intersection(answer_words)
-
-            if len(common_words) >= len(gt_words) * 0.7:
+        if answer is not None:
+            if answer == normalized_ground_truth:
                 answer_score = answer_reward_weight
+            elif normalized_ground_truth in answer or answer in normalized_ground_truth:
+                answer_score = answer_reward_weight * 0.5
             else:
-                answer_score = 0.0
+                gt_words = set(normalized_ground_truth.split())
+                answer_words = set(answer.split())
+                common_words = gt_words.intersection(answer_words)
+
+                if len(common_words) >= len(gt_words) * 0.7:
+                    answer_score = answer_reward_weight
+                else:
+                    answer_score = 0.0
+        else:
+            answer_score = 0.0
 
         # 검색 점수와 답안 점수를 독립적으로 합산
         # 최종 점수 = 검색 점수(0~partial_reward_weight) + 답안 점수(0~1-partial_reward_weight)
