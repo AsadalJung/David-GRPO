@@ -1,0 +1,59 @@
+set -x
+
+RETRIEVER_URL=${RETRIEVER_URL:-http://localhost:8001/retrieve}
+export RETRIEVER_URL
+export VLLM_ATTENTION_BACKEND=XFORMERS
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+export WANDB_API_KEY=YOUR_API_KEY
+
+python3 -m verl.trainer.main_ppo \
+    algorithm.adv_estimator=grpo \
+    data.train_files=data/processed/hotpot_qa/warmup.parquet \
+    data.val_files=data/processed/hotpot_qa/dev.parquet \
+    data.train_batch_size=4 \
+    data.val_batch_size=40 \
+    data.shuffle=False \
+    data.max_prompt_length=1024 \
+    data.max_response_length=8192 \
+    +data.add_gold_sequence=True \
+    +data.gold_response_key=gold_response \
+    actor_rollout_ref.model.path=Qwen/Qwen2.5-1.5B \
+    actor_rollout_ref.actor.optim.lr=1e-5 \
+    actor_rollout_ref.model.use_remove_padding=True \
+    actor_rollout_ref.actor.ppo_mini_batch_size=5 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4 \
+    actor_rollout_ref.actor.ulysses_sequence_parallel_size=2 \
+    actor_rollout_ref.actor.use_kl_loss=False \
+    actor_rollout_ref.actor.kl_loss_coef=0.001 \
+    actor_rollout_ref.actor.kl_loss_type=kl \
+    actor_rollout_ref.model.enable_gradient_checkpointing=True \
+    actor_rollout_ref.actor.fsdp_config.param_offload=False \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=2 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+    +actor_rollout_ref.rollout.max_search_nums=5 \
+    actor_rollout_ref.rollout.name=vllm \
+    +actor_rollout_ref.rollout.mode=search \
+    +actor_rollout_ref.rollout.model=search \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.70 \
+    actor_rollout_ref.rollout.temperature=0.6 \
+    actor_rollout_ref.rollout.n=5 \
+    actor_rollout_ref.rollout.max_num_seqs=128 \
+    actor_rollout_ref.rollout.disable_log_stats=True \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=2 \
+    actor_rollout_ref.ref.fsdp_config.param_offload=True \
+    algorithm.kl_ctrl.kl_coef=0.0 \
+    trainer.critic_warmup=0 \
+    trainer.logger=['console','wandb'] \
+    trainer.project_name='verl_grpo_hotpotqa' \
+    trainer.experiment_name='on_off_warmup_1.5b' \
+    trainer.n_gpus_per_node=4 \
+    trainer.nnodes=1 \
+    +trainer.use_observation_mask=True \
+    +trainer.give_partial_reward=True \
+    +trainer.val_before_train=False \
+    trainer.save_freq=10 \
+    trainer.test_freq=10 \
+    trainer.val_generations_to_log_to_wandb=40 \
+    trainer.total_training_steps=50 \
+    trainer.total_epochs=10000 \
