@@ -62,6 +62,8 @@ actor_rollout_ref:
   rollout:
     name: vllm
     temperature: 1.0
+    retriever_url: ${oc.env:RETRIEVER_URL,http://localhost:8001/retrieve}
+    validation_retriever_url: ${oc.env:VAL_RETRIEVER_URL,${actor_rollout_ref.rollout.retriever_url}}
     top_k: -1 # 0 for hf rollout, -1 for vllm rollout
     top_p: 1
     prompt_length: ${data.max_prompt_length}  # not use for opensource
@@ -168,6 +170,10 @@ trainer:
   require_search_match_for_answer: False
   partial_reward_weight: 0.5
   val_generations_to_log_to_wandb: 0
+  # Persist every gathered validation answer as atomic, per-call JSONL.
+  persist_validation_outputs: True
+  # null -> ${trainer.default_local_dir}/validation_outputs
+  validation_outputs_dir: null
   nnodes: 1
   n_gpus_per_node: 8
   save_freq: -1

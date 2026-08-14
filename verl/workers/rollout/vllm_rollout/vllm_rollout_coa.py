@@ -36,6 +36,11 @@ from tqdm import tqdm
 from verl import DataProto
 from verl.utils.torch_functional import get_eos_mask, pad_sequence_to_length
 from verl.workers.rollout.base import BaseRollout
+from verl.workers.rollout.vllm_rollout.otr_prefix_mapping import (
+    canonical_prefixes_from_prompt_major_expansion,
+    prompt_id_for_prompt_major_sequence,
+    split_final_sequences_at_canonical_prefix,
+)
 from verl.third_party.vllm import LLM, vllm_version
 from verl.third_party.vllm import parallel_state as vllm_ps
 from vllm import SamplingParams
@@ -50,6 +55,7 @@ import json
 import time
 import asyncio
 import httpx
+from urllib.parse import urlparse
 
 # Retriever endpoint can be overridden via RETRIEVER_URL env var.
 BASE_URL = os.getenv("RETRIEVER_URL", "http://localhost:8001/retrieve")
@@ -89,29 +95,43 @@ def _normalize_eos_token_ids(eos_token_id):
     return int(eos_token_id), [int(eos_token_id)]
 
 # Determine whether to use Tree-GRPO retriever (port 8003) or AutoCoA retriever (default)
-def _is_tree_retriever():
+def _resolve_retriever_url(retriever_url=None):
+    url = str(retriever_url or BASE_URL).strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"Invalid retriever URL: {url!r}")
+    return url
+
+
+def _select_retriever_url(is_validation, retriever_url, validation_retriever_url):
+    return _resolve_retriever_url(
+        validation_retriever_url if is_validation else retriever_url
+    )
+
+
+def _is_tree_retriever(retriever_url=None):
     try:
-        port = BASE_URL.split(":")[-1].split("/")[0]
-        return port in {"8003", "8004"}
-    except Exception:
+        return urlparse(_resolve_retriever_url(retriever_url)).port in {8003, 8004}
+    except (TypeError, ValueError):
         return False
 
 
-def do_retrevial(text, top_k=3, return_score=True):
+def do_retrevial(text, top_k=3, return_score=True, retriever_url=None):
     """
     Single query retrieval with two protocol variants:
     - AutoCoA retriever (default): payload {"query": text, "tok_k": top_k, "return_score": return_score}
     - Tree retriever (port 8003): payload {"queries": [text], "topk": top_k, "return_scores": True}
       (Tree server has a bug on return_scores=False, so keep True)
     """
-    tree_mode = _is_tree_retriever()
+    retriever_url = _resolve_retriever_url(retriever_url)
+    tree_mode = _is_tree_retriever(retriever_url)
     if tree_mode:
         payload = {"queries": [text], "topk": top_k, "return_scores": True}
     else:
         payload = {"query": text, "tok_k": top_k, "return_score": return_score}
 
     try:
-        response = requests.post(BASE_URL, json=payload)
+        response = requests.post(retriever_url, json=payload)
         response.raise_for_status()
         data = response.json()
         if tree_mode:
@@ -125,11 +145,18 @@ def do_retrevial(text, top_k=3, return_score=True):
         return None
 
 
-def do_batch_retrevial(text_list, top_k=3, return_score=True, batch_size=512):
+def do_batch_retrevial(
+    text_list,
+    top_k=3,
+    return_score=True,
+    batch_size=512,
+    retriever_url=None,
+):
     """
     Batch retrieval with two protocol variants (see do_retrevial docstring).
     """
-    tree_mode = _is_tree_retriever()
+    retriever_url = _resolve_retriever_url(retriever_url)
+    tree_mode = _is_tree_retriever(retriever_url)
     if tree_mode:
         payload = {"queries": text_list, "topk": top_k, "return_scores": True}
     else:
@@ -138,7 +165,7 @@ def do_batch_retrevial(text_list, top_k=3, return_score=True, batch_size=512):
     retries = 2
     while retries > 0:
         try:
-            response = requests.post(BASE_URL, json=payload)
+            response = requests.post(retriever_url, json=payload)
             response.raise_for_status()
             data = response.json()
             if tree_mode:
@@ -155,11 +182,11 @@ def do_batch_retrevial(text_list, top_k=3, return_score=True, batch_size=512):
             continue
 
 
-def topk_format(result, topk=1):
+def topk_format(result, topk=1, retriever_url=None):
     """
     Normalize retrieval results into a string. Supports both protocols.
     """
-    tree_mode = _is_tree_retriever()
+    tree_mode = _is_tree_retriever(retriever_url)
     if tree_mode:
         # result is a list of {"document": {...}, "score": ...}
         documents = [item["document"] for item in result]
@@ -168,17 +195,24 @@ def topk_format(result, topk=1):
 
     if topk == 1:
         return documents[0]["contents"]
-    else:
-        content_list = []
-        for index, doc in enumerate(documents, start=1):
-            content_list.append(f"result {index}: {doc['contents']}")
-        return "\n".join(content_list)
-def get_search_results(texts):
+
+    content_list = []
+    for index, doc in enumerate(documents, start=1):
+        content_list.append(f"result {index}: {doc['contents']}")
+    return "\n".join(content_list)
+
+
+def get_search_results(texts, retriever_url=None):
     
     # search_reslut_token = "<search_result> {search_result} </search_result>"
     
 
-    retrevial_result = do_batch_retrevial(texts, top_k=3)
+    retriever_url = _resolve_retriever_url(retriever_url)
+    retrevial_result = do_batch_retrevial(
+        texts,
+        top_k=3,
+        retriever_url=retriever_url,
+    )
     
     search_result_list = []
     for res in retrevial_result:
@@ -188,7 +222,11 @@ def get_search_results(texts):
             search_result_list.append(search_reslut_token)
         else:
             # search_result_list.append(topk_format(res, topk=3))
-            search_reslut_token = "<search_result> " + topk_format(res, topk=3) + " </search_result>\n\n"
+            search_reslut_token = (
+                "<search_result> "
+                + topk_format(res, topk=3, retriever_url=retriever_url)
+                + " </search_result>\n\n"
+            )
             search_result_list.append(search_reslut_token)
             
     
@@ -597,7 +635,8 @@ def process_search_answer_batch(ans_list,
                                reach_limit=False,
                                tokenizer=None,
                                max_prompt_tokens=None,
-                               search_stopped_flags=None):
+                               search_stopped_flags=None,
+                               retriever_url=None):
     search_queries = []
     ans_modified_list = []
     for ans in ans_list:
@@ -643,7 +682,10 @@ def process_search_answer_batch(ans_list,
                     queries_to_search.append(search_queries[i])
                     query_indices.append(i)
             
-            search_results = get_search_results(queries_to_search)
+            search_results = get_search_results(
+                queries_to_search,
+                retriever_url=retriever_url,
+            )
             
             assert len(search_results) == len(queries_to_search), f"검색 결과 수와 쿼리 수가 일치하지 않습니다: {len(search_results)} vs {len(queries_to_search)}"
             
@@ -825,6 +867,12 @@ class vLLMRollout(BaseRollout):
         self.max_search_nums = config.get('max_search_nums', 10)
         self.use_otr_sampling = config.get('use_otr_sampling', False)  # Enable OTR (Optimal Truncation Resampling) mode when set.
         self.tensor_parallel_size = tensor_parallel_size  # DataProto chunk에서 사용
+        self.retriever_url = _resolve_retriever_url(
+            config.get('retriever_url', BASE_URL)
+        )
+        self.validation_retriever_url = _resolve_retriever_url(
+            config.get('validation_retriever_url', self.retriever_url)
+        )
         
         if self.use_otr_sampling:
             pass  # OTR Sampling enabled
@@ -874,15 +922,16 @@ class vLLMRollout(BaseRollout):
                 reach_limit = (search_iter >= remaining - 1) or (used >= remaining)
                 sequences_reach_limit.append(reach_limit)
 
-            max_prompt_tokens = _max_prompt_tokens_for_generation(self.config.prompt_length,
-                                                                 self.config.response_length,
-                                                                 single_resample_params.max_tokens)
+            # Canonical Ours (a983dogy/bbcf) did not stop a continuation
+            # early based on a locally computed context-limit guard.
+            max_prompt_tokens = None
             new_prefix_list, search_flag_list, search_stopped_flags = self._process_search_answer_batch_with_individual_limits(
                 current_response_strs,
                 current_prefix_list,
                 sequences_reach_limit,
                 max_prompt_tokens=max_prompt_tokens,
-                search_stopped_flags=search_stopped_flags
+                search_stopped_flags=search_stopped_flags,
+                retriever_url=self.retriever_url,
             )
 
             current_prefix_list = new_prefix_list
@@ -1065,7 +1114,8 @@ class vLLMRollout(BaseRollout):
                                                             current_prefix_list,
                                                             sequences_reach_limit,
                                                             max_prompt_tokens=None,
-                                                            search_stopped_flags=None):
+                                                            search_stopped_flags=None,
+                                                            retriever_url=None):
         """개별 시퀀스별 검색 제한을 적용한 배치 검색 처리"""
         search_queries = []
         ans_modified_list = []
@@ -1119,7 +1169,10 @@ class vLLMRollout(BaseRollout):
                         query_indices.append(i)
                 
                 if queries_to_search:
-                    search_results = get_search_results(queries_to_search)
+                    search_results = get_search_results(
+                        queries_to_search,
+                        retriever_url=retriever_url,
+                    )
                     
                     assert len(search_results) == len(queries_to_search), f"검색 결과 수와 쿼리 수가 일치하지 않습니다: {len(search_results)} vs {len(queries_to_search)}"
                     
@@ -1209,6 +1262,11 @@ class vLLMRollout(BaseRollout):
 
         # 🔧 검증 모드일 때 OTR sampling 비활성화
         is_validation = prompts.meta_info.get('validate', False)
+        active_retriever_url = _select_retriever_url(
+            is_validation,
+            self.retriever_url,
+            self.validation_retriever_url,
+        )
         use_otr_for_this_generation = self.use_otr_sampling and not is_validation
         
         # Validation/Training mode detection
@@ -1364,6 +1422,11 @@ class vLLMRollout(BaseRollout):
             pass
         
         raw_current_prefix_list = copy.deepcopy(current_prefix_list)
+        canonical_prompt_prefixes = canonical_prefixes_from_prompt_major_expansion(
+            raw_current_prefix_list,
+            base_prompt_count=len(idx_list),
+            current_n=current_n,
+        )
         
        
         re_sampling_params = copy.deepcopy(self.sampling_params)
@@ -1383,16 +1446,17 @@ class vLLMRollout(BaseRollout):
                 re_sampling_params.max_tokens = 2048
                 
             start_time = time.time()
-            max_prompt_tokens = _max_prompt_tokens_for_generation(self.config.prompt_length,
-                                                                 self.config.response_length,
-                                                                 re_sampling_params.max_tokens)
+            # Match canonical Ours continuation semantics.  Passing None
+            # disables the post-hoc local context-limit guard.
+            max_prompt_tokens = None
             new_prefix_list, search_flag_list, search_stopped_flags = process_search_answer_batch(
                 response_str_list, 
                 current_prefix_list, 
                 reach_limit=(iter == self.max_search_nums),
                 tokenizer=self.tokenizer,
                 max_prompt_tokens=max_prompt_tokens,
-                search_stopped_flags=search_stopped_flags
+                search_stopped_flags=search_stopped_flags,
+                retriever_url=active_retriever_url,
             )
             
             current_prefix_list = new_prefix_list
@@ -1468,7 +1532,16 @@ class vLLMRollout(BaseRollout):
             base_prompts = len(idx_list)
             assert total_sequences == len(current_prefix_list), "response/prefix length mismatch"
             assert base_prompts > 0, "base_prompts must be > 0"
-            sequences_per_prompt = max(1, total_sequences // base_prompts)
+            if total_sequences % base_prompts:
+                raise ValueError(
+                    f"sequence count {total_sequences} is not divisible by {base_prompts} prompts"
+                )
+            sequences_per_prompt = total_sequences // base_prompts
+            if sequences_per_prompt != current_n:
+                raise ValueError(
+                    "rollout multiplicity mismatch: "
+                    f"expected n={current_n}, got {sequences_per_prompt}"
+                )
             
             assembled_full_sequences = []
             assembled_supporting_facts_list = []
@@ -1478,7 +1551,7 @@ class vLLMRollout(BaseRollout):
             for i in range(total_sequences):
                 original_prompt_idx = i // sequences_per_prompt
                 if original_prompt_idx >= base_prompts:
-                    original_prompt_idx = base_prompts - 1
+                    raise ValueError(f"invalid prompt index {original_prompt_idx} at sequence {i}")
                 
                 # 1) 전체 시퀀스 저장
                 assembled_full_sequences.append(current_prefix_list[i] + response_str_list[i])
@@ -1507,13 +1580,12 @@ class vLLMRollout(BaseRollout):
                     assembled_ground_truths.append("")
                 
                 # 3) 프롬프트 길이 (원본 프롬프트 텍스트 기준)
-                if original_prompt_idx < len(raw_current_prefix_list):
-                    pl = len(raw_current_prefix_list[original_prompt_idx])
-                else:
-                    pl = 0
+                pl = len(canonical_prompt_prefixes[original_prompt_idx])
                 assembled_prompt_lengths.append(pl)
         except Exception as _align_e:
             print(f"[OTR] Assembly alignment failed: {type(_align_e).__name__}: {_align_e}")
+            if use_otr_for_this_generation:
+                raise
         
         # 새로운 OTR 로직 적용 (use_otr_sampling이 True일 때만)
         if use_otr_for_this_generation and self.use_otr_sampling:  # 🚫 OTR 임시 비활성화
@@ -1565,13 +1637,13 @@ class vLLMRollout(BaseRollout):
             # 🆕 새로운 OTR 재샘플링 로직 적용 (프롬프트 길이 정보 포함)
             prompt_lengths = []
             for i, facts_meta in enumerate(supporting_facts_list):
-                if isinstance(facts_meta, dict) and 'original_prompt_id' in facts_meta:
-                    original_id = facts_meta['original_prompt_id']
-                    if original_id >= len(raw_current_prefix_list):
-                        raise ValueError(f"Invalid original_prompt_id {original_id} at sequence {i}, raw_current_prefix_list length: {len(raw_current_prefix_list)}")
-                    prompt_lengths.append(len(raw_current_prefix_list[original_id]))
-                else:
-                    raise ValueError(f"Missing original_prompt_id in supporting_facts_list at index {i}: {facts_meta}")
+                original_id = prompt_id_for_prompt_major_sequence(
+                    facts_meta,
+                    sequence_index=i,
+                    base_prompt_count=len(canonical_prompt_prefixes),
+                    current_n=current_n,
+                )
+                prompt_lengths.append(len(canonical_prompt_prefixes[original_id]))
             
             otr_trainer_config = {
                 'give_partial_reward': True,
@@ -1595,7 +1667,7 @@ class vLLMRollout(BaseRollout):
             try:
                 base_prompts = len(idx_list)
                 for i in range(base_prompts):
-                    prompt_token_lens[i] = len(self.tokenizer.encode(raw_current_prefix_list[i], add_special_tokens=False))
+                    prompt_token_lens[i] = len(self.tokenizer.encode(canonical_prompt_prefixes[i], add_special_tokens=False))
             except Exception as _tok_e:
                 print(f"[OTR] prompt token length failed: {type(_tok_e).__name__}: {_tok_e}")
                 prompt_token_lens = {}
@@ -1700,30 +1772,15 @@ class vLLMRollout(BaseRollout):
                 otr_output_tokens_per_seq = [0] * len(final_sequences)
             
             # 최종 결과를 response_str_list로 변환
-            response_str_list = []
-            current_prefix_list = []
             supporting_facts_list = final_supporting_facts
-            
-            for i, full_seq in enumerate(final_sequences):
-                # 원본 프롬프트 길이 계산
-                if i < len(supporting_facts_list):
-                    facts_meta = supporting_facts_list[i]
-                    if isinstance(facts_meta, dict) and 'original_prompt_id' in facts_meta:
-                        original_id = facts_meta['original_prompt_id']
-                        if original_id < len(raw_current_prefix_list):
-                            prefix_len = len(raw_current_prefix_list[original_id])
-                        else:
-                            prefix_len = len(raw_current_prefix_list[0]) if raw_current_prefix_list else 0
-                    else:
-                        prefix_len = len(raw_current_prefix_list[0]) if raw_current_prefix_list else 0
-                else:
-                    prefix_len = len(raw_current_prefix_list[0]) if raw_current_prefix_list else 0
-                
-                current_prefix = full_seq[:prefix_len]
-                response_str = full_seq[prefix_len:]
-                
-                current_prefix_list.append(current_prefix)
-                response_str_list.append(response_str)
+            current_prefix_list, response_str_list, final_prompt_ids = (
+                split_final_sequences_at_canonical_prefix(
+                    final_sequences,
+                    supporting_facts_list,
+                    canonical_prompt_prefixes,
+                    current_n=current_n,
+                )
+            )
             
             # New OTR completed
             
@@ -1734,11 +1791,13 @@ class vLLMRollout(BaseRollout):
             
             for p_id, p in enumerate(full_content):
                 # 그룹 기반 프리픽스 길이 계산 (fallback 경로)
-                original_prompt_id = p_id // current_n if 'current_n' in locals() and current_n > 0 else 0
-                if original_prompt_id < len(raw_current_prefix_list):
-                    prefix_len = len(raw_current_prefix_list[original_prompt_id])
-                else:
-                    prefix_len = len(raw_current_prefix_list[0]) if raw_current_prefix_list else 0
+                original_prompt_id = final_prompt_ids[p_id]
+                canonical_prefix = canonical_prompt_prefixes[original_prompt_id]
+                if not p.startswith(canonical_prefix):
+                    raise ValueError(
+                        f"recombined sequence {p_id} lost canonical prompt {original_prompt_id}"
+                    )
+                prefix_len = len(canonical_prefix)
                 response.append(self.tokenizer.encode(p[prefix_len:], add_special_tokens=False))
             
             max_response_len = -1
@@ -1847,15 +1906,23 @@ class vLLMRollout(BaseRollout):
             full_content = []
             for response_str, current_prefix in zip(response_str_list, current_prefix_list):
                 full_content.append(current_prefix + response_str)
+            expected_full_content = len(canonical_prompt_prefixes) * current_n
+            if len(full_content) != expected_full_content:
+                raise ValueError(
+                    "fallback sequence count mismatch: "
+                    f"expected {expected_full_content}, got {len(full_content)}"
+                )
             response = []
             
             for p_id, p in enumerate(full_content):
                 # 그룹 기반 프리픽스 길이 계산 (fallback 경로)
-                original_prompt_id = p_id // current_n if 'current_n' in locals() and current_n > 0 else 0
-                if original_prompt_id < len(raw_current_prefix_list):
-                    prefix_len = len(raw_current_prefix_list[original_prompt_id])
-                else:
-                    prefix_len = len(raw_current_prefix_list[0]) if raw_current_prefix_list else 0
+                original_prompt_id = p_id // current_n
+                canonical_prefix = canonical_prompt_prefixes[original_prompt_id]
+                if not p.startswith(canonical_prefix):
+                    raise ValueError(
+                        f"fallback sequence {p_id} lost canonical prompt {original_prompt_id}"
+                    )
+                prefix_len = len(canonical_prefix)
                 response.append(self.tokenizer.encode(p[prefix_len:], add_special_tokens=False))
             
             max_response_len = -1

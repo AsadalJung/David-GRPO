@@ -35,6 +35,12 @@ from verl.single_controller.base import Worker
 from verl.single_controller.ray import RayResourcePool, RayWorkerGroup, RayClassWithInitArgs
 from verl.single_controller.ray.base import create_colocated_worker_cls
 from verl.trainer.ppo import core_algos
+from verl.trainer.validation_output import (
+    ValidationOutputWriter,
+    build_validation_record,
+    is_primary_process,
+    resolve_validation_output_base_dir,
+)
 from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seqlen_unbalance
 from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path
 from verl.utils.dataset.rl_dataset import RLHFDataset, collate_fn
@@ -373,6 +379,9 @@ class RayPPOTrainer(object):
 
         # rollout search budget 스케줄링 상태
         self._current_rollout_max_search = None
+        # Validation runs on this single Ray driver. Create the filesystem
+        # writer lazily so constructing a trainer never writes to disk.
+        self._validation_output_writer = None
 
         # define KL control
         if self.use_reference_policy:
@@ -699,12 +708,19 @@ class RayPPOTrainer(object):
                                            collate_fn=collate_fn,
                                            sampler=sampler)
 
+        persist_validation_outputs = self.config.trainer.get('persist_validation_outputs', True)
         self.val_dataset = RLHFDataset(parquet_files=self.config.data.val_files,
                                        tokenizer=self.tokenizer,
                                        prompt_key=self.config.data.prompt_key,
                                        max_prompt_length=self.config.data.max_prompt_length,
                                        filter_prompts=True,
-                                       return_raw_chat=self.config.data.get('return_raw_chat', False),
+                                       # Preserve the original user message for the
+                                       # validation answer audit log. This does not
+                                       # alter the tokenized model input.
+                                       return_raw_chat=(
+                                           self.config.data.get('return_raw_chat', False)
+                                           or persist_validation_outputs
+                                       ),
                                        truncation='error')
         self.val_dataloader = DataLoader(dataset=self.val_dataset,
                                          batch_size=len(self.val_dataset),
@@ -782,6 +798,59 @@ class RayPPOTrainer(object):
         wandb.log({"val/generations": new_table}, step=self.global_steps)
         self.validation_table = new_table
 
+    def _get_validation_output_writer(self):
+        """Return the run-local writer on the single primary driver."""
+
+        if not self.config.trainer.get('persist_validation_outputs', True):
+            return None
+        if not is_primary_process():
+            return None
+        if self._validation_output_writer is not None:
+            return self._validation_output_writer
+
+        configured_dir = self.config.trainer.get('validation_outputs_dir', None)
+        base_dir = resolve_validation_output_base_dir(
+            default_local_dir=self.config.trainer.default_local_dir,
+            configured_dir=configured_dir,
+        )
+        val_files = self.config.data.val_files
+        if isinstance(val_files, str):
+            val_files = [val_files]
+        else:
+            try:
+                val_files = list(val_files)
+            except TypeError:
+                val_files = [str(val_files)]
+
+        self._validation_output_writer = ValidationOutputWriter(
+            base_dir,
+            session_metadata={
+                'project_name': str(self.config.trainer.project_name),
+                'experiment_name': str(self.config.trainer.experiment_name),
+                'validation_files': val_files,
+                'default_local_dir': str(self.config.trainer.default_local_dir),
+                'writer_process': 'ray_ppo_driver',
+            },
+        )
+        print(
+            f"Validation answers will be persisted under "
+            f"{self._validation_output_writer.session_dir}"
+        )
+        return self._validation_output_writer
+
+    @staticmethod
+    def _validation_row_metadata(non_tensor_batch, row_index):
+        """Extract one gathered row without assuming every value is a numpy array."""
+
+        metadata = {}
+        for key, values in non_tensor_batch.items():
+            try:
+                metadata[key] = values[row_index]
+            except (IndexError, KeyError, TypeError):
+                # Keep persistence compatible with optional scalar metadata.
+                metadata[key] = values
+        return metadata
+
     def _validate(self):
         reward_tensor_lst = []
         data_source_lst = []
@@ -790,6 +859,8 @@ class RayPPOTrainer(object):
         sample_inputs = []
         sample_outputs = []
         sample_scores = []
+        validation_records = []
+        validation_writer = self._get_validation_output_writer()
 
         # 검증에서는 10회만 사용하고, 검증 직후에는 기존 설정으로 복구한다.
         prev_rollout_max_search = self._current_rollout_max_search
@@ -812,7 +883,14 @@ class RayPPOTrainer(object):
 
                 # Store original inputs
                 input_ids = test_batch.batch['input_ids']
-                input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in input_ids]
+                input_texts = [
+                    self.tokenizer.decode(
+                        ids,
+                        skip_special_tokens=True,
+                        clean_up_tokenization_spaces=False,
+                    )
+                    for ids in input_ids
+                ]
                 sample_inputs.extend(input_texts)
 
                 test_gen_batch = test_batch.pop(['input_ids', 'attention_mask', 'position_ids'])
@@ -833,7 +911,14 @@ class RayPPOTrainer(object):
 
                 # Store generated outputs
                 output_ids = test_output_gen_batch.batch['responses']
-                output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
+                output_texts = [
+                    self.tokenizer.decode(
+                        ids,
+                        skip_special_tokens=True,
+                        clean_up_tokenization_spaces=False,
+                    )
+                    for ids in output_ids
+                ]
                 sample_outputs.extend(output_texts)
 
                 test_batch = test_batch.union(test_output_gen_batch)
@@ -845,8 +930,41 @@ class RayPPOTrainer(object):
                 scores = reward_tensor.sum(-1).cpu().tolist()
                 sample_scores.extend(scores)
 
+                if validation_writer is not None:
+                    if len(input_texts) != len(output_texts) or len(output_texts) != len(scores):
+                        raise RuntimeError(
+                            "Validation persistence requires one gathered output and score per input: "
+                            f"inputs={len(input_texts)}, outputs={len(output_texts)}, scores={len(scores)}"
+                        )
+                    for batch_row, (input_text, output_text, score) in enumerate(
+                        zip(input_texts, output_texts, scores)
+                    ):
+                        row_metadata = self._validation_row_metadata(
+                            test_batch.non_tensor_batch,
+                            batch_row,
+                        )
+                        validation_records.append(
+                            build_validation_record(
+                                validation_row=len(validation_records),
+                                prompt=input_text,
+                                response=output_text,
+                                total_reward=score,
+                                example_metadata=row_metadata,
+                            )
+                        )
+
                 reward_tensor_lst.append(reward_tensor)
                 data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
+
+            if validation_writer is not None:
+                output_path = validation_writer.write_step(
+                    global_step=self.global_steps,
+                    records=validation_records,
+                )
+                print(
+                    f"Persisted {len(validation_records)} complete validation answers "
+                    f"to {output_path}"
+                )
 
             self._maybe_log_val_generations_to_wandb(inputs=sample_inputs, outputs=sample_outputs, scores=sample_scores)
 

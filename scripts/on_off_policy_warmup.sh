@@ -4,7 +4,10 @@ RETRIEVER_URL=${RETRIEVER_URL:-http://localhost:8001/retrieve}
 export RETRIEVER_URL
 export VLLM_ATTENTION_BACKEND=XFORMERS
 export CUDA_VISIBLE_DEVICES=0,1,2,3
-export WANDB_API_KEY=YOUR_API_KEY
+export WANDB_MODE=${WANDB_MODE:-offline}
+if [[ "${WANDB_MODE}" == "online" ]]; then
+    : "${WANDB_API_KEY:?Set your own WANDB_API_KEY when WANDB_MODE=online}"
+fi
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
