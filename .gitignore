@@ -1,0 +1,19 @@
+# Large or generated artifacts
+hotpotqa_retriever/hotpotqa_corpus.json
+hotpotqa_retriever/hotpotqa_index.faiss
+
+# Eval retriever corpora/indexes
+/data/wiki/
+/data/wiki-24/
+
+# Runtime outputs
+wandb/
+outputs/
+*.log
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+.env
+.env.*
+checkpoints/
