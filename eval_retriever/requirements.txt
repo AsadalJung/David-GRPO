@@ -1,0 +1,14 @@
+# If you don't have GPU FAISS, replace faiss-gpu with faiss-cpu.
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
+transformers
+datasets
+pyserini
+faiss-gpu==1.7.3
+uvicorn
+fastapi
+numpy
+tqdm
+pydantic
+huggingface_hub  # needed for wiki-18 download helper

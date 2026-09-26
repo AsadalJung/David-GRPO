@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_ROOT}"
+
+RETRIEVER_URL=${RETRIEVER_URL:-http://localhost:8001/retrieve}
+export RETRIEVER_URL
+export VAL_RETRIEVER_URL=${VAL_RETRIEVER_URL:-${RETRIEVER_URL}}
+export VLLM_ATTENTION_BACKEND=XFORMERS
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-4,5,6,7}
+export WANDB_MODE=${WANDB_MODE:-offline}
+if [[ "${WANDB_MODE}" == "online" ]]; then
+    : "${WANDB_API_KEY:?Set your own WANDB_API_KEY when WANDB_MODE=online}"
+fi
+
+WARMUP_CHECKPOINT_PATH=${WARMUP_CHECKPOINT_PATH:-/path/to/warmup-checkpoint}
+
+TRAIN_DATA_PATH=${TRAIN_DATA_PATH:-data/processed/hotpot_qa/train.parquet}
+VAL_DATA_PATH=${VAL_DATA_PATH:-data/processed/hotpot_qa/dev.parquet}
+LR_WARMUP_RATIO=${LR_WARMUP_RATIO:-0}
+N_GPUS_PER_NODE=${N_GPUS_PER_NODE:-4}
+SAVE_FREQ=${SAVE_FREQ:-10}
+TEST_FREQ=${TEST_FREQ:-10}
+EXPERIMENT_NAME=${EXPERIMENT_NAME:-David-GRPO}
+
+# Model-specific overrides are allowed; the corrected actor settings stay last.
+python3 -m verl.trainer.main_ppo \
+    algorithm.adv_estimator=grpo \
+    data.train_files="${TRAIN_DATA_PATH}" \
+    data.val_files="${VAL_DATA_PATH}" \
+    data.train_batch_size=24 \
+    data.val_batch_size=96 \
+    data.shuffle=False \
+    data.max_prompt_length=1024 \
+    data.max_response_length=8192 \
+    +data.add_gold_sequence=False \
+    +data.gold_response_key=gold_response \
+    actor_rollout_ref.model.path="${WARMUP_CHECKPOINT_PATH}" \
+    actor_rollout_ref.actor.optim.lr=1e-6 \
+    actor_rollout_ref.actor.optim.lr_warmup_steps_ratio="${LR_WARMUP_RATIO}" \
+    actor_rollout_ref.actor.optim.warmup_style=constant \
+    actor_rollout_ref.model.use_remove_padding=True \
+    actor_rollout_ref.actor.ppo_mini_batch_size=12 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2 \
+    actor_rollout_ref.actor.ulysses_sequence_parallel_size=2 \
+    actor_rollout_ref.actor.kl_loss_coef=0.001 \
+    actor_rollout_ref.model.enable_gradient_checkpointing=True \
+    actor_rollout_ref.actor.fsdp_config.param_offload=False \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=2 \
+    actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
+    +actor_rollout_ref.rollout.max_search_nums=10 \
+    actor_rollout_ref.rollout.name=vllm \
+    +actor_rollout_ref.rollout.mode=search \
+    +actor_rollout_ref.rollout.model=search \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.temperature=0.6 \
+    actor_rollout_ref.rollout.n=5 \
+    actor_rollout_ref.rollout.max_num_seqs=512 \
+    actor_rollout_ref.rollout.disable_log_stats=True \
+    +actor_rollout_ref.rollout.use_otr_sampling=True\
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=4 \
+    actor_rollout_ref.ref.fsdp_config.param_offload=False \
+    algorithm.kl_ctrl.kl_coef=0.001 \
+    trainer.critic_warmup=0 \
+    trainer.logger=['console','wandb'] \
+    trainer.project_name='verl_grpo_hotpotqa' \
+    trainer.experiment_name="${EXPERIMENT_NAME}" \
+    trainer.n_gpus_per_node="${N_GPUS_PER_NODE}" \
+    trainer.nnodes=1 \
+    trainer.use_observation_mask=True \
+    trainer.give_partial_reward=True \
+    +trainer.val_before_train=True \
+    trainer.save_freq="${SAVE_FREQ}" \
+    trainer.test_freq="${TEST_FREQ}" \
+    trainer.val_generations_to_log_to_wandb=10\
+    trainer.total_training_steps=215 \
+    trainer.total_epochs=1 \
+    "$@" \
+    actor_rollout_ref.actor.use_kl_loss=True \
+    actor_rollout_ref.actor.kl_loss_type=mse \
+    actor_rollout_ref.actor.use_action_loss_mask=True \
+    actor_rollout_ref.actor.otr_prompt_balanced_loss=True

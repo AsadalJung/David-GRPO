@@ -1,0 +1,34 @@
+# HotpotQA fast retriever dependencies
+
+# Core deep learning framework
+torch
+torchvision
+torchaudio
+
+# Embedding and NLP models
+sentence-transformers
+transformers
+tokenizers
+
+# Vector search engine
+faiss-gpu  # GPU build (or faiss-cpu)
+
+# Web server and API
+fastapi
+uvicorn[standard]
+pydantic
+
+# Data processing
+numpy<2.0  # Keep 1.x for faiss-gpu compatibility
+pandas
+tqdm
+requests
+
+# Utilities
+python-dotenv
+loguru
+
+# Dev and test tools
+pytest
+black
+flake8
